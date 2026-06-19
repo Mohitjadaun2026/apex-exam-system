@@ -1,10 +1,4 @@
-Bhai, **Canva ek design tool hai, wo code file generate nahi karta.** Lekin main samajh gaya, tujhe ek hi file chahiye jisme saara content ho taaki Mohit ko koi confuse na ho.
 
-Ye le **"One-Page Master Guide"**—ise copy karke bas `README.md` file mein daal de. Ye professional bhi hai aur simple bhi.
-
----
-
-```markdown
 # 🚀 APEX ERP: Ultimate Setup Guide
 
 A complete Student Assessment & Management Platform.
