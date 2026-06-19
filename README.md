@@ -1,51 +1,74 @@
-# APEX Online Examination System
+Bhai, **Canva ek design tool hai, wo code file generate nahi karta.** Lekin main samajh gaya, tujhe ek hi file chahiye jisme saara content ho taaki Mohit ko koi confuse na ho.
 
-An advanced, secure, and modern online examination platform featuring role-based dashboards, live quiz management, dynamic timers, and automated result generation.
-
----
-
-## 🚀 Features
-
-### 🔐 Role-Based Authentication
-* **Admin Dashboard:** Full control over subjects, managing teachers, enrolling students, and monitoring complete system data.
-* **Teacher Dashboard:** Create exams, manage specific subject questions, dynamically assign questions to papers, and view filtered class-wise performance results.
-* **Student Dashboard:** View active exams, attempt real-time quizzes, see instantaneous pass/fail status and detailed scorecards.
-
-### ⏱️ Core Examination Engine
-* **Dynamic Timer:** Configurable overall exam duration along with question-level countdown timers.
-* **Smart Question Assigner:** Seamlessly select and attach questions from the question bank to specific mock/test sessions.
-* **Auto-Evaluation:** Instant score calculation, percentage breakdown, and automated Pass/Fail marking.
+Ye le **"One-Page Master Guide"**—ise copy karke bas `README.md` file mein daal de. Ye professional bhi hai aur simple bhi.
 
 ---
 
-## 🛠️ Tech Stack
+```markdown
+# 🚀 APEX ERP: Ultimate Setup Guide
 
-### Backend
-* **Framework:** Django 
-* **API Architecture:** Django REST Framework (DRF)
-* **Database:** SQLite / MySQL / PostgreSQL compatible
+A complete Student Assessment & Management Platform.
 
-### Frontend
-* **Library:** React.js (Vite)
-* **Routing:** React Router DOM
-* **Styling:** Bootstrap 5 & Custom Modern CSS (Glassmorphic Components)
-* **HTTP Client:** Axios (Interceptors handled for seamless routing)
+---
+
+## 🛠 Tech Stack
+| Tier | Technology |
+| :--- | :--- |
+| **Backend** | Python, Django, DRF |
+| **Database** | SQLite (Built-in) |
+| **Frontend** | React.js |
+
+---
+
+## 🏗 System Overview
+
+
+[Image of web application architecture diagram]
+
+
+---
+
+## ⚙️ How to Run
+Follow these commands in your Mac terminal:
+
+### 1. Setup Backend
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python3 manage.py migrate
+python3 manage.py runserver
+
+```
+
+### 2. Setup Frontend
+
+(Open a new terminal tab)
+
+```bash
+cd frontend
+npm install
+npm start
+
+```
 
 ---
 
 ## 📂 Project Structure
 
 ```text
-apex-exam-system/
-│
-├── backend/               # Django REST API Source Code
-│   ├── core/              # Main project configurations
-│   ├── users/             # User Management (Admin, Teacher, Student)
-│   ├── exams/             # Question Bank and Exam Management
-│   └── results/           # Results processing & automated grading
-│
-└── frontend/              # React JS Application
-    ├── src/
-    │   ├── components/    # Reusable modern UI layouts
-    │   ├── pages/         # Admin, Teacher, and Student views
-    │   └── services/      # API configurations (Axios base instance)
+Apex/
+├── backend/    # API & Database logic
+├── frontend/   # UI & React components
+└── README.md   # Documentation
+
+```
+
+
+## 💡 Troubleshooting Checklist
+
+1. **Command not found:** Install [VS Code](https://code.visualstudio.com/), [Python](https://www.python.org/), and [Node.js](https://nodejs.org/).
+2. **Database:** SQLite is auto-managed; no manual SQL installation required.
+3. **Ports:** Backend on `8000`, Frontend on `3000`.
+
