@@ -3,7 +3,52 @@ from rest_framework.response import Response
 from users.models import Student
 from .models import ExamQuestion, Question, Subject, Exam
 from users.models import Teacher
+from results.models import Result # Ensure karo ye import ho
 
+@api_view(['POST'])
+def submit_exam(request):
+    try:
+        student_id = request.data.get('student_id')
+        exam_id = request.data.get('exam_id')
+        user_answers = request.data.get('answers', {}) # {'question_id': 'selected_option'}
+
+        exam = Exam.objects.get(id=exam_id)
+        student = Student.objects.get(id=student_id)
+        
+        score = 0
+        total_questions = 0
+        
+        # Sabhi questions jo exam se jude hain unhe fetch karo
+        exam_questions = ExamQuestion.objects.filter(exam=exam)
+        total_questions = exam_questions.count()
+
+        for eq in exam_questions:
+            q = eq.question
+            q_id_str = str(q.id)
+            
+            # Agar student ne jawab diya hai
+            if q_id_str in user_answers:
+                if user_answers[q_id_str] == q.correct_answer:
+                    score += q.marks
+        
+        # Percentage calculate karo
+        percentage = (score / exam.total_marks) * 100 if exam.total_marks > 0 else 0
+        status = "Passed" if percentage >= exam.passing_marks else "Failed"
+
+        # Result save karo
+        Result.objects.create(
+            student=student,
+            exam=exam,
+            score=score,
+            total_questions=total_questions,
+            percentage=percentage,
+            status=status
+        )
+
+        return Response({"message": "Exam submitted successfully", "score": score})
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=400)
 
 @api_view(['GET'])
 def get_subjects(request):

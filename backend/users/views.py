@@ -1,6 +1,8 @@
 from django.contrib.auth.hashers import check_password, make_password
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import Student, Teacher
 from users.models import Student, User
@@ -14,7 +16,11 @@ def login_user(request):
     try:
         user = User.objects.get(email=email)
         if check_password(password, user.password):
+            
+            refresh = RefreshToken.for_user(user)
+            
             response_data = {
+                "access": str(refresh.access_token),
                 "id": user.id,
                 "email": user.email,
                 "role": user.role,
@@ -34,11 +40,11 @@ def login_user(request):
                 except Teacher.DoesNotExist:
                     response_data["teacher_id"] = None
                     
-            return Response(response_data)
+            return Response(response_data, status=status.HTTP_200_OK)
         else:
-            return Response({"error": "Invalid Password"}, status=400)
+            return Response({"error": "Invalid Password"}, status=status.HTTP_401_UNAUTHORIZED)
     except User.DoesNotExist:
-        return Response({"error": "User Not Found"}, status=400)
+        return Response({"error": "User Not Found"}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET'])
 def get_students(request):
@@ -92,7 +98,7 @@ def delete_student(request, student_id):
     except Student.DoesNotExist:
         return Response({
             "error": "Student Not Found"
-        }, status=404)
+        }, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET'])
 def get_teachers(request):
@@ -133,8 +139,13 @@ def add_teacher(request):
 
 @api_view(['DELETE'])
 def delete_teacher(request, teacher_id):
-    teacher = Teacher.objects.get(id=teacher_id)
-    teacher.user.delete()
-    return Response({
-        "message": "Teacher Deleted"
-    })
+    try:
+        teacher = Teacher.objects.get(id=teacher_id)
+        teacher.user.delete()
+        return Response({
+            "message": "Teacher Deleted"
+        })
+    except Teacher.DoesNotExist:
+        return Response({
+            "error": "Teacher Not Found"
+        }, status=status.HTTP_404_NOT_FOUND)

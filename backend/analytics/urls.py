@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import dashboard_stats, student_dashboard
+from .views import dashboard_stats, student_dashboard, teacher_dashboard
 
 urlpatterns = [
 
@@ -15,4 +15,8 @@ urlpatterns = [
         'student-dashboard/<int:student_id>/',
         student_dashboard
     ),
+    path(
+    'teacher-dashboard/<int:teacher_id>/',
+    teacher_dashboard
+),
 ]
