@@ -16,6 +16,7 @@ def submit_exam(request):
         student = Student.objects.get(id=student_id)
         
         score = 0
+        correct_answers = 0
         total_questions = 0
         
         # Sabhi questions jo exam se jude hain unhe fetch karo
@@ -28,12 +29,19 @@ def submit_exam(request):
             
             # Agar student ne jawab diya hai
             if q_id_str in user_answers:
-                if user_answers[q_id_str] == q.correct_answer:
+                selected_answer = str(user_answers[q_id_str]).strip().upper()
+                correct_answer = str(q.correct_answer).strip().upper()
+
+                if selected_answer == correct_answer:
                     score += q.marks
+                    correct_answers += 1
         
-        # Percentage calculate karo
-        percentage = (score / exam.total_marks) * 100 if exam.total_marks > 0 else 0
-        status = "Passed" if percentage >= exam.passing_marks else "Failed"
+        # Percentage calculate karo based on correct answers so a fully correct paper shows 100%
+        percentage = (correct_answers / total_questions) * 100 if total_questions > 0 else 0
+
+        passing_marks = getattr(exam, "passing_marks", 0) or 0
+        passing_threshold = passing_marks if 0 < passing_marks <= 100 else 40
+        status = "PASS" if percentage >= passing_threshold else "FAIL"
 
         # Result save karo
         Result.objects.create(
@@ -41,11 +49,13 @@ def submit_exam(request):
             exam=exam,
             score=score,
             total_questions=total_questions,
+            correct_answers=correct_answers,
+            wrong_answers=total_questions - correct_answers,
             percentage=percentage,
             status=status
         )
 
-        return Response({"message": "Exam submitted successfully", "score": score})
+        return Response({"message": "Exam submitted successfully", "score": score, "percentage": percentage, "status": status})
 
     except Exception as e:
         return Response({"error": str(e)}, status=400)
@@ -453,6 +463,7 @@ def assign_question(request):
 
 @api_view(['GET'])
 def get_exam_questions(request, exam_id):
+    exam = Exam.objects.get(id=exam_id)
     exam_questions = ExamQuestion.objects.filter(
         exam_id=exam_id
     )
@@ -468,7 +479,13 @@ def get_exam_questions(request, exam_id):
             "option_d": q.option_d,
             "correct_answer": q.correct_answer
         })
-    return Response(data)
+    return Response({
+        "questions": data,
+        "duration": exam.duration,
+        "question_timer": exam.question_timer,
+        "passing_marks": exam.passing_marks,
+        "total_marks": exam.total_marks,
+    })
 
 try:
     from results.models import Result
