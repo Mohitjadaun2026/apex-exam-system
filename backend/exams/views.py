@@ -1,19 +1,40 @@
-from rest_framework.decorators import api_view
+from django.db import transaction
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
 from users.models import Student
 from .models import ExamQuestion, Question, Subject, Exam
 from users.models import Teacher
 from results.models import Result # Ensure karo ye import ho
+from api_utils import (
+    get_authenticated_student,
+    require_authenticated_role,
+)
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def submit_exam(request):
     try:
-        student_id = request.data.get('student_id')
         exam_id = request.data.get('exam_id')
         user_answers = request.data.get('answers', {}) # {'question_id': 'selected_option'}
 
-        exam = Exam.objects.get(id=exam_id)
-        student = Student.objects.get(id=student_id)
+        student, error_response = get_authenticated_student(request)
+        if error_response:
+            return error_response
+
+        exam = Exam.objects.filter(id=exam_id).select_related('subject').first()
+        if not exam:
+            return Response({"error": "Exam Not Found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if not exam.is_active:
+            return Response({"error": "Exam is not active"}, status=status.HTTP_403_FORBIDDEN)
+
+        if str(student.class_name).strip().lower() != str(exam.class_name).strip().lower():
+            return Response({"error": "This exam is not assigned to your class"}, status=status.HTTP_403_FORBIDDEN)
+
+        if Result.objects.filter(student=student, exam=exam).exists():
+            return Response({"error": "Exam already submitted"}, status=status.HTTP_409_CONFLICT)
         
         score = 0
         correct_answers = 0
@@ -22,10 +43,12 @@ def submit_exam(request):
         # Sabhi questions jo exam se jude hain unhe fetch karo
         exam_questions = ExamQuestion.objects.filter(exam=exam)
         total_questions = exam_questions.count()
+        total_possible_marks = 0
 
         for eq in exam_questions:
             q = eq.question
             q_id_str = str(q.id)
+            total_possible_marks += int(q.marks or 0)
             
             # Agar student ne jawab diya hai
             if q_id_str in user_answers:
@@ -36,32 +59,45 @@ def submit_exam(request):
                     score += q.marks
                     correct_answers += 1
         
-        # Percentage calculate karo based on correct answers so a fully correct paper shows 100%
-        percentage = (correct_answers / total_questions) * 100 if total_questions > 0 else 0
+        if total_questions == 0:
+            return Response({"error": "No questions assigned to this exam"}, status=status.HTTP_400_BAD_REQUEST)
 
-        passing_marks = getattr(exam, "passing_marks", 0) or 0
-        passing_threshold = passing_marks if 0 < passing_marks <= 100 else 40
-        status = "PASS" if percentage >= passing_threshold else "FAIL"
+        # Percentage is based on the actual assigned marks so complete correctness shows 100%
+        percentage = (score / total_possible_marks) * 100 if total_possible_marks > 0 else 0
+
+        configured_passing_marks = int(getattr(exam, "passing_marks", 0) or 0)
+        if 0 < configured_passing_marks <= total_possible_marks:
+            passed = score >= configured_passing_marks
+        else:
+            passed = percentage >= 40
+
+        status_value = "PASS" if passed else "FAIL"
 
         # Result save karo
-        Result.objects.create(
-            student=student,
-            exam=exam,
-            score=score,
-            total_questions=total_questions,
-            correct_answers=correct_answers,
-            wrong_answers=total_questions - correct_answers,
-            percentage=percentage,
-            status=status
-        )
+        with transaction.atomic():
+            Result.objects.create(
+                student=student,
+                exam=exam,
+                score=score,
+                total_questions=total_questions,
+                correct_answers=correct_answers,
+                wrong_answers=total_questions - correct_answers,
+                percentage=percentage,
+                status=status_value
+            )
 
-        return Response({"message": "Exam submitted successfully", "score": score, "percentage": percentage, "status": status})
+        return Response({"message": "Exam submitted successfully", "score": score, "percentage": percentage, "status": status_value})
 
     except Exception as e:
-        return Response({"error": str(e)}, status=400)
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_subjects(request):
+
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
 
     subjects = Subject.objects.all().order_by(
         'class_name',
@@ -86,7 +122,12 @@ def get_subjects(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def add_subject(request):
+
+    role_error = require_authenticated_role(request, {"ADMIN"})
+    if role_error:
+        return role_error
 
     name = request.data.get(
         "name"
@@ -142,7 +183,12 @@ def add_subject(request):
 
 
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
 def delete_subject(request, subject_id):
+
+    role_error = require_authenticated_role(request, {"ADMIN"})
+    if role_error:
+        return role_error
 
     try:
 
@@ -166,10 +212,15 @@ def delete_subject(request, subject_id):
             "error":
             "Subject Not Found"
 
-        }, status=404)
+        }, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_questions(request):
+
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
 
     questions = Question.objects.all().order_by(
         '-created_at'
@@ -209,13 +260,36 @@ def get_questions(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def add_question(request):
+
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
 
     try:
 
         subject = Subject.objects.get(
             id=request.data.get("subject_id")
         )
+
+        question_text = str(request.data.get("question_text") or "").strip()
+        option_a = str(request.data.get("option_a") or "").strip()
+        option_b = str(request.data.get("option_b") or "").strip()
+        option_c = str(request.data.get("option_c") or "").strip()
+        option_d = str(request.data.get("option_d") or "").strip()
+        correct_answer = str(request.data.get("correct_answer") or "").strip().upper()
+        difficulty_level = str(request.data.get("difficulty_level") or "Easy").strip()
+        marks = int(request.data.get("marks") or 0)
+
+        if not question_text or not option_a or not option_b or not option_c or not option_d:
+            return Response({"error": "All question fields are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if correct_answer not in {"A", "B", "C", "D"}:
+            return Response({"error": "Correct answer must be one of A, B, C, D"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if marks <= 0:
+            return Response({"error": "Marks must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
 
         Question.objects.create(
 
@@ -227,35 +301,29 @@ def add_question(request):
 
             question_text=request.data.get(
                 "question_text"
-            ),
+            ).strip(),
 
             option_a=request.data.get(
                 "option_a"
-            ),
+            ).strip(),
 
             option_b=request.data.get(
                 "option_b"
-            ),
+            ).strip(),
 
             option_c=request.data.get(
                 "option_c"
-            ),
+            ).strip(),
 
             option_d=request.data.get(
                 "option_d"
-            ),
+            ).strip(),
 
-            correct_answer=request.data.get(
-                "correct_answer"
-            ),
+            correct_answer=correct_answer,
 
-            marks=request.data.get(
-                "marks"
-            ),
+            marks=marks,
 
-            difficulty_level=request.data.get(
-                "difficulty_level"
-            )
+            difficulty_level=difficulty_level
 
         )
 
@@ -277,7 +345,12 @@ def add_question(request):
 
 
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
 def delete_question(request, question_id):
+
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
 
     try:
 
@@ -301,7 +374,7 @@ def delete_question(request, question_id):
             "error":
             "Question Not Found"
 
-        }, status=404)
+        }, status=status.HTTP_404_NOT_FOUND)
 
 
 
@@ -309,7 +382,12 @@ def delete_question(request, question_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_exams(request):
+
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
 
     exams = Exam.objects.all().order_by(
         '-created_at'
@@ -345,7 +423,12 @@ def get_exams(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def create_exam(request):
+
+    role_error = require_authenticated_role(request, {"ADMIN"})
+    if role_error:
+        return role_error
 
     try:
 
@@ -355,33 +438,37 @@ def create_exam(request):
             )
         )
 
+        exam_name = str(request.data.get("exam_name") or "").strip()
+        class_name = str(request.data.get("class_name") or "").strip()
+        duration = int(request.data.get("duration") or 0)
+        question_timer = int(request.data.get("question_timer") or 0)
+        total_marks = int(request.data.get("total_marks") or 0)
+        passing_marks = int(request.data.get("passing_marks") or 0)
+
+        if not exam_name or not class_name:
+            return Response({"error": "Exam name and class are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if duration <= 0 or question_timer <= 0 or total_marks <= 0:
+            return Response({"error": "Duration, question timer, and total marks must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if passing_marks <= 0 or passing_marks > total_marks:
+            return Response({"error": "Passing marks must be greater than zero and less than or equal to total marks"}, status=status.HTTP_400_BAD_REQUEST)
+
         exam = Exam.objects.create(
 
-            exam_name=request.data.get(
-                "exam_name"
-            ),
+            exam_name=exam_name,
 
-            class_name=request.data.get(
-                "class_name"
-            ),
+            class_name=class_name,
 
             subject=subject,
 
-            duration=request.data.get(
-                "duration"
-            ),
+            duration=duration,
 
-            question_timer=request.data.get(
-                "question_timer"
-            ),
+            question_timer=question_timer,
 
-            total_marks=request.data.get(
-                "total_marks"
-            ),
+            total_marks=total_marks,
 
-            passing_marks=request.data.get(
-                "passing_marks"
-            )
+            passing_marks=passing_marks
 
         )
 
@@ -406,7 +493,12 @@ def create_exam(request):
     
 
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
 def delete_exam(request, exam_id):
+
+    role_error = require_authenticated_role(request, {"ADMIN"})
+    if role_error:
+        return role_error
 
     try:
 
@@ -430,7 +522,7 @@ def delete_exam(request, exam_id):
             "error":
             "Exam Not Found"
 
-        }, status=404)
+        }, status=status.HTTP_404_NOT_FOUND)
     
 
     
@@ -446,27 +538,52 @@ def delete_exam(request, exam_id):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def assign_question(request):
-    exam = Exam.objects.get(
-        id=request.data.get("exam_id")
-    )
-    question = Question.objects.get(
-        id=request.data.get("question_id")
-    )
-    ExamQuestion.objects.create(
-        exam=exam,
-        question=question
-    )
-    return Response({
-        "message": "Question Assigned"
-    })
+
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
+
+    try:
+        exam = Exam.objects.get(id=request.data.get("exam_id"))
+        question = Question.objects.get(id=request.data.get("question_id"))
+
+        if ExamQuestion.objects.filter(exam=exam, question=question).exists():
+            return Response({"error": "Question already assigned to this exam"}, status=status.HTTP_409_CONFLICT)
+
+        ExamQuestion.objects.create(
+            exam=exam,
+            question=question
+        )
+        return Response({
+            "message": "Question Assigned"
+        }, status=status.HTTP_201_CREATED)
+    except Exam.DoesNotExist:
+        return Response({"error": "Exam Not Found"}, status=status.HTTP_404_NOT_FOUND)
+    except Question.DoesNotExist:
+        return Response({"error": "Question Not Found"}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_exam_questions(request, exam_id):
     exam = Exam.objects.get(id=exam_id)
     exam_questions = ExamQuestion.objects.filter(
         exam_id=exam_id
     )
+
+    user_role = str(getattr(request.user, "role", "")).upper()
+    if user_role == "STUDENT":
+        student, error_response = get_authenticated_student(request)
+        if error_response:
+            return error_response
+
+        if str(student.class_name).strip().lower() != str(exam.class_name).strip().lower():
+            return Response({"error": "This exam is not assigned to your class"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not exam.is_active:
+            return Response({"error": "Exam is not active"}, status=status.HTTP_403_FORBIDDEN)
+
     data = []
     for eq in exam_questions:
         q = eq.question
@@ -477,7 +594,6 @@ def get_exam_questions(request, exam_id):
             "option_b": q.option_b,
             "option_c": q.option_c,
             "option_d": q.option_d,
-            "correct_answer": q.correct_answer
         })
     return Response({
         "questions": data,
@@ -487,24 +603,27 @@ def get_exam_questions(request, exam_id):
         "total_marks": exam.total_marks,
     })
 
-try:
-    from results.models import Result
-except ImportError:
-    from apps.results.models import Result # Agar aapka apps folder alag hai
-
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def available_exams(request, student_id):
     try:
-        student = Student.objects.get(id=student_id)
+        student, error_response = get_authenticated_student(request)
+        if error_response:
+            return error_response
+
+        if str(student.id) != str(student_id):
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+
         std_class = str(student.class_name).strip()
         
         # 1. Is class ke saare exams fetch karo
-        exams = Exam.objects.filter(class_name__icontains=std_class)
+        exams = Exam.objects.filter(class_name__iexact=std_class, is_active=True)
         
         # 2. Is student ne jo exams de diye hain, unki ids ki list nikalo
         attempted_exam_ids = Result.objects.filter(
             student_id=student_id
         ).values_list('exam_id', flat=True)
+        attempted_exam_ids = set(attempted_exam_ids)
         
         data = []
         for exam in exams:
@@ -521,11 +640,16 @@ def available_exams(request, student_id):
     except Student.DoesNotExist:
         return Response({
             "error": "Student Not Found"
-        }, status=404)
+        }, status=status.HTTP_404_NOT_FOUND)
     
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def toggle_exam_status(request, exam_id):
     try:
+        role_error = require_authenticated_role(request, {"ADMIN"})
+        if role_error:
+            return role_error
+
         exam = Exam.objects.get(id=exam_id)
         exam.is_active = not exam.is_active
         exam.save()
@@ -536,22 +660,27 @@ def toggle_exam_status(request, exam_id):
     except Exam.DoesNotExist:
         return Response({
             "error": "Exam Not Found"
-        }, status=404)
+        }, status=status.HTTP_404_NOT_FOUND)
     
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def teacher_exams(request, teacher_id):
 
     try:
+        teacher = Teacher.objects.get(id=teacher_id)
 
-        teacher = Teacher.objects.get(
-            id=teacher_id
-        )
+        role_error = require_authenticated_role(request, {"TEACHER"})
+        if role_error:
+            return role_error
+
+        if str(teacher.user_id) != str(request.user.id):
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
 
         exams = Exam.objects.filter(
 
-            class_name=teacher.assigned_classes,
+            class_name__iexact=teacher.assigned_classes,
 
-            subject__name=teacher.subject
+            subject__name__iexact=teacher.subject
 
         ).order_by('-created_at')
 
@@ -585,4 +714,4 @@ def teacher_exams(request, teacher_id):
 
             "error": "Teacher Not Found"
 
-        }, status=404)
+        }, status=status.HTTP_404_NOT_FOUND)
