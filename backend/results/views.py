@@ -1,13 +1,21 @@
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
 
 from .models import Result
 from exams.models import Exam
 from users.models import Student, Teacher
+from api_utils import require_authenticated_role, get_authenticated_student, get_authenticated_teacher
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def save_result(request):
+
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
 
     student = Student.objects.get(
         id=request.data.get("student_id")
@@ -27,6 +35,12 @@ def save_result(request):
         )
     )
 
+    if total_questions <= 0:
+        return Response({"error": "Total questions must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if score < 0:
+        return Response({"error": "Score cannot be negative"}, status=status.HTTP_400_BAD_REQUEST)
+
     percentage = (
         score / total_questions
     ) * 100
@@ -34,7 +48,7 @@ def save_result(request):
     correct_answers = score
 
     wrong_answers = (
-        total_questions - score
+        total_questions - correct_answers
     )
 
     status = (
@@ -70,11 +84,16 @@ def save_result(request):
     return Response({
         "message":
         "Result Saved"
-    })
+    }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def all_results(request):
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
+
     # .select_related() use karna taaki database query fast ho
     results = Result.objects.select_related('student', 'exam', 'exam__subject').all()
 
@@ -94,7 +113,15 @@ def all_results(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def student_results(request, student_id):
+    student, error_response = get_authenticated_student(request)
+    if error_response:
+        return error_response
+
+    if str(student.id) != str(student_id):
+        return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+
     # Sirf us student ke results fetch karo
     results = Result.objects.filter(student_id=student_id).select_related('exam', 'exam__subject')
     
@@ -112,9 +139,15 @@ def student_results(request, student_id):
     return Response(data)
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def teacher_results(request, teacher_id):
     try:
-        teacher = Teacher.objects.get(id=teacher_id)
+        teacher, error_response = get_authenticated_teacher(request)
+        if error_response:
+            return error_response
+
+        if str(teacher.id) != str(teacher_id):
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
         
         # Filter karke results lao
         results = Result.objects.filter(
@@ -138,4 +171,4 @@ def teacher_results(request, teacher_id):
         return Response(data)
 
     except Teacher.DoesNotExist:
-        return Response({"error": "Teacher Not Found"}, status=404)
+        return Response({"error": "Teacher Not Found"}, status=status.HTTP_404_NOT_FOUND)

@@ -12,6 +12,14 @@ from api_utils import (
     require_authenticated_role,
 )
 
+
+def normalize_class_label(value):
+    normalized = "".join(ch for ch in str(value or "").strip().lower() if ch.isalnum())
+    digits = "".join(ch for ch in normalized if ch.isdigit())
+    if digits:
+        return digits.lstrip("0") or "0"
+    return normalized
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def submit_exam(request):
@@ -468,7 +476,9 @@ def create_exam(request):
 
             total_marks=total_marks,
 
-            passing_marks=passing_marks
+            passing_marks=passing_marks,
+
+            is_active=True
 
         )
 
@@ -578,7 +588,7 @@ def get_exam_questions(request, exam_id):
         if error_response:
             return error_response
 
-        if str(student.class_name).strip().lower() != str(exam.class_name).strip().lower():
+        if normalize_class_label(student.class_name) != normalize_class_label(exam.class_name):
             return Response({"error": "This exam is not assigned to your class"}, status=status.HTTP_403_FORBIDDEN)
 
         if not exam.is_active:
@@ -614,10 +624,13 @@ def available_exams(request, student_id):
         if str(student.id) != str(student_id):
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
 
-        std_class = str(student.class_name).strip()
+        std_class = normalize_class_label(student.class_name)
         
         # 1. Is class ke saare exams fetch karo
-        exams = Exam.objects.filter(class_name__iexact=std_class, is_active=True)
+        exams = [
+            exam for exam in Exam.objects.filter(is_active=True).select_related("subject")
+            if normalize_class_label(exam.class_name) == std_class
+        ]
         
         # 2. Is student ne jo exams de diye hain, unki ids ki list nikalo
         attempted_exam_ids = Result.objects.filter(
