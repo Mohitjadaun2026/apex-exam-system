@@ -1,14 +1,22 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Q, Avg
 from users.models import Student, Teacher
 from exams.models import Exam
 from results.models import Result
 from django.db import models  # Yeh import zaroori hai
 from django.db.models import Count, Q, Avg # Yeh bhi verify kar lo
+from rest_framework.decorators import permission_classes
+from api_utils import require_authenticated_role
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def dashboard_stats(request):
+    role_error = require_authenticated_role(request, {"ADMIN"})
+    if role_error:
+        return role_error
+
     total_students = Student.objects.count()
     total_teachers = Teacher.objects.count()
     total_subjects = Exam.objects.values('subject').distinct().count()
@@ -32,7 +40,15 @@ def dashboard_stats(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def student_dashboard(request, student_id):
+    student = Student.objects.filter(id=student_id).select_related('user').first()
+    if not student:
+        return Response({"error": "Student Not Found"}, status=404)
+
+    if not request.user.is_authenticated or str(request.user.id) != str(student.user_id):
+        return Response({"error": "Permission denied"}, status=403)
+
     # 1. Pehle results fetch karo
     results = Result.objects.filter(student_id=student_id).select_related('exam', 'exam__subject')
     
@@ -60,9 +76,13 @@ def student_dashboard(request, student_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def teacher_dashboard(request, teacher_id):
     try:
         teacher = Teacher.objects.get(id=teacher_id)
+
+        if str(request.user.id) != str(teacher.user_id):
+            return Response({"error": "Permission denied"}, status=403)
         
         results = Result.objects.filter(
             exam__class_name=teacher.assigned_classes,
