@@ -10,6 +10,7 @@ from results.models import Result # Ensure karo ye import ho
 from api_utils import (
     get_authenticated_student,
     require_authenticated_role,
+    get_authenticated_teacher,
 )
 
 
@@ -107,23 +108,29 @@ def get_subjects(request):
     if role_error:
         return role_error
 
-    subjects = Subject.objects.all().order_by(
-        'class_name',
-        'name'
-    )
+    user_role = str(getattr(request.user, "role", "")).upper()
+
+    if user_role == "TEACHER":
+        teacher, err = get_authenticated_teacher(request)
+        if err:
+            return err
+        subjects = Subject.objects.filter(
+            name__iexact=teacher.subject,
+            class_name__iexact=teacher.assigned_classes
+        ).order_by('class_name', 'name')
+    else:
+        subjects = Subject.objects.all().order_by(
+            'class_name',
+            'name'
+        )
 
     data = []
 
     for subject in subjects:
-
         data.append({
-
             "id": subject.id,
-
             "name": subject.name,
-
             "class_name": subject.class_name
-
         })
 
     return Response(data)
@@ -230,38 +237,34 @@ def get_questions(request):
     if role_error:
         return role_error
 
-    questions = Question.objects.all().order_by(
-        '-created_at'
-    )
+    user_role = str(getattr(request.user, "role", "")).upper()
+
+    if user_role == "TEACHER":
+        teacher, err = get_authenticated_teacher(request)
+        if err:
+            return err
+        questions = Question.objects.filter(
+            subject__name__iexact=teacher.subject,
+            class_name__iexact=teacher.assigned_classes
+        ).order_by('-created_at')
+    else:
+        questions = Question.objects.all().order_by('-created_at')
 
     data = []
 
     for q in questions:
-
         data.append({
-
             "id": q.id,
-
             "subject_name": q.subject.name,
-
             "class_name": q.class_name,
-
             "question_text": q.question_text,
-
             "option_a": q.option_a,
-
             "option_b": q.option_b,
-
             "option_c": q.option_c,
-
             "option_d": q.option_d,
-
             "correct_answer": q.correct_answer,
-
             "marks": q.marks,
-
             "difficulty_level": q.difficulty_level
-
         })
 
     return Response(data)
@@ -277,9 +280,22 @@ def add_question(request):
 
     try:
 
+        user_role = str(getattr(request.user, "role", "")).upper()
+
+        # Fetch subject early to validate teacher permissions against it
         subject = Subject.objects.get(
             id=request.data.get("subject_id")
         )
+
+        # If teacher, ensure they can only add for their subject and assigned class
+        if user_role == "TEACHER":
+            teacher, err = get_authenticated_teacher(request)
+            if err:
+                return err
+
+            requested_class = str(request.data.get("class_name") or "").strip()
+            if subject.name.strip().lower() != teacher.subject.strip().lower() or requested_class.strip().lower() != str(teacher.assigned_classes).strip().lower():
+                return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
 
         question_text = str(request.data.get("question_text") or "").strip()
         option_a = str(request.data.get("option_a") or "").strip()
@@ -336,19 +352,13 @@ def add_question(request):
         )
 
         return Response({
-
-            "message":
-            "Question Added Successfully"
-
+            "message": "Question Added Successfully"
         })
 
     except Subject.DoesNotExist:
 
         return Response({
-
-            "error":
-            "Subject Not Found"
-
+            "error": "Subject Not Found"
         }, status=404)
 
 
@@ -356,33 +366,18 @@ def add_question(request):
 @permission_classes([IsAuthenticated])
 def delete_question(request, question_id):
 
-    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    # Only ADMIN can delete questions
+    role_error = require_authenticated_role(request, {"ADMIN"})
     if role_error:
         return role_error
 
     try:
-
-        question = Question.objects.get(
-            id=question_id
-        )
-
+        question = Question.objects.get(id=question_id)
         question.delete()
-
-        return Response({
-
-            "message":
-            "Question Deleted Successfully"
-
-        })
+        return Response({"message": "Question Deleted Successfully"})
 
     except Question.DoesNotExist:
-
-        return Response({
-
-            "error":
-            "Question Not Found"
-
-        }, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Question Not Found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 
@@ -434,7 +429,8 @@ def get_exams(request):
 @permission_classes([IsAuthenticated])
 def create_exam(request):
 
-    role_error = require_authenticated_role(request, {"ADMIN"})
+    # Allow ADMIN and TEACHER, but teachers are restricted to their subject/class
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
     if role_error:
         return role_error
 
@@ -445,6 +441,18 @@ def create_exam(request):
                 "subject_id"
             )
         )
+
+        user_role = str(getattr(request.user, "role", "")).upper()
+
+        # If teacher, validate they are creating exam only for their subject and assigned class
+        if user_role == "TEACHER":
+            teacher, err = get_authenticated_teacher(request)
+            if err:
+                return err
+
+            requested_class = str(request.data.get("class_name") or "").strip()
+            if subject.name.strip().lower() != teacher.subject.strip().lower() or requested_class.strip().lower() != str(teacher.assigned_classes).strip().lower():
+                return Response({"error": "Permission denied: you can only create exams for your assigned subject and class"}, status=status.HTTP_403_FORBIDDEN)
 
         exam_name = str(request.data.get("exam_name") or "").strip()
         class_name = str(request.data.get("class_name") or "").strip()
@@ -559,6 +567,20 @@ def assign_question(request):
         exam = Exam.objects.get(id=request.data.get("exam_id"))
         question = Question.objects.get(id=request.data.get("question_id"))
 
+        # If teacher, enforce they can only assign questions for their subject and assigned class
+        user_role = str(getattr(request.user, "role", "")).upper()
+        if user_role == "TEACHER":
+            teacher, err = get_authenticated_teacher(request)
+            if err:
+                return err
+
+            # Normalize comparisons
+            if str(exam.class_name).strip().lower() != str(teacher.assigned_classes).strip().lower() or str(exam.subject.name).strip().lower() != str(teacher.subject).strip().lower():
+                return Response({"error": "Permission denied for this exam"}, status=status.HTTP_403_FORBIDDEN)
+
+            if str(question.class_name).strip().lower() != str(teacher.assigned_classes).strip().lower() or str(question.subject.name).strip().lower() != str(teacher.subject).strip().lower():
+                return Response({"error": "Permission denied for this question"}, status=status.HTTP_403_FORBIDDEN)
+
         if ExamQuestion.objects.filter(exam=exam, question=question).exists():
             return Response({"error": "Question already assigned to this exam"}, status=status.HTTP_409_CONFLICT)
 
@@ -574,15 +596,52 @@ def assign_question(request):
     except Question.DoesNotExist:
         return Response({"error": "Question Not Found"}, status=status.HTTP_404_NOT_FOUND)
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def unassign_question(request):
+    """Remove a question from an exam. BODY: { exam_id, question_id }"""
+    role_error = require_authenticated_role(request, {"ADMIN", "TEACHER"})
+    if role_error:
+        return role_error
+
+    try:
+        exam = Exam.objects.get(id=request.data.get("exam_id"))
+        question = Question.objects.get(id=request.data.get("question_id"))
+
+        user_role = str(getattr(request.user, "role", "")).upper()
+        if user_role == "TEACHER":
+            teacher, err = get_authenticated_teacher(request)
+            if err:
+                return err
+
+            if str(exam.class_name).strip().lower() != str(teacher.assigned_classes).strip().lower() or str(exam.subject.name).strip().lower() != str(teacher.subject).strip().lower():
+                return Response({"error": "Permission denied for this exam"}, status=status.HTTP_403_FORBIDDEN)
+
+            if str(question.class_name).strip().lower() != str(teacher.assigned_classes).strip().lower() or str(question.subject.name).strip().lower() != str(teacher.subject).strip().lower():
+                return Response({"error": "Permission denied for this question"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Find and delete the ExamQuestion
+        eq = ExamQuestion.objects.filter(exam=exam, question=question).first()
+        if not eq:
+            return Response({"error": "Assignment Not Found"}, status=status.HTTP_404_NOT_FOUND)
+
+        eq.delete()
+        return Response({"message": "Question Unassigned"}, status=status.HTTP_200_OK)
+
+    except Exam.DoesNotExist:
+        return Response({"error": "Exam Not Found"}, status=status.HTTP_404_NOT_FOUND)
+    except Question.DoesNotExist:
+        return Response({"error": "Question Not Found"}, status=status.HTTP_404_NOT_FOUND)
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_exam_questions(request, exam_id):
     exam = Exam.objects.get(id=exam_id)
-    exam_questions = ExamQuestion.objects.filter(
-        exam_id=exam_id
-    )
 
     user_role = str(getattr(request.user, "role", "")).upper()
+
+    # Students: ensure class match and exam active
     if user_role == "STUDENT":
         student, error_response = get_authenticated_student(request)
         if error_response:
@@ -593,6 +652,16 @@ def get_exam_questions(request, exam_id):
 
         if not exam.is_active:
             return Response({"error": "Exam is not active"}, status=status.HTTP_403_FORBIDDEN)
+
+    # Teachers: ensure they can only view exam questions for their assigned class/subject
+    if user_role == "TEACHER":
+        teacher, err = get_authenticated_teacher(request)
+        if err:
+            return err
+        if str(exam.class_name).strip().lower() != str(teacher.assigned_classes).strip().lower() or str(exam.subject.name).strip().lower() != str(teacher.subject).strip().lower():
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+
+    exam_questions = ExamQuestion.objects.filter(exam_id=exam_id)
 
     data = []
     for eq in exam_questions:
